@@ -4,6 +4,7 @@ import os
 import logging
 from .models import PredictionRequest, PredictionResponse
 from ml.ppo_agent import PPOAgent
+from utils import get_state_vector
 from ml.safety_guardian import SafetyGuardian
 from config import ACTION_SPACE, MAX_ACTIVE_DRIVERS, MAX_PENDING_REQUESTS, MODELS_DIR
 
@@ -38,7 +39,7 @@ def load_models():
         for zone, model_files in models_by_zone.items():
             latest_model = sorted(model_files, reverse=True)[0]
             model_path = os.path.join(MODELS_DIR, latest_model)
-            MODEL_CACHE[zone] = PPOAgent(model_path=model_path)
+            MODEL_CACHE[zone] = PPOAgent(state_dim=10, action_dim=len(ACTION_SPACE), model_path=model_path)
             logger.info(f"Model for zone '{zone}' loaded successfully from '{latest_model}'.")
 
         if not MODEL_CACHE:
@@ -66,20 +67,13 @@ def predict_price(request: PredictionRequest):
         raise HTTPException(status_code=404, detail=f"Model for zone '{request.zone}' not found.")
 
     # 1. Preprocess the input data into a normalized state vector
-    state = np.array([
-        request.hour / 24.0,
-        request.day_of_week / 7.0,
-        min(request.active_drivers / MAX_ACTIVE_DRIVERS, 1.0),
-        min(request.pending_requests / MAX_PENDING_REQUESTS, 1.0),
-        request.traffic_index,
-        request.weather_score
-    ], dtype=np.float32)
+    state = get_state_vector(request.hour, request.day_of_week, request.active_drivers, request.pending_requests, request.traffic_index, request.weather_score, request.competitor_price, request.event)
 
     # 2. Use the PPO agent to select an action
     action_idx, _ = agent.select_action(state, training=False)
 
     # 3. Apply the safety guardian
-    safe_action_idx = SafetyGuardian.validate_action(state, action_idx, ACTION_SPACE)
+    safe_action_idx = SafetyGuardian.validate_action(state, action_idx, ACTION_SPACE, request.competitor_price, request.event)
 
     # 4. Get the final price multiplier from the action space
     price_multiplier = ACTION_SPACE[safe_action_idx]

@@ -12,6 +12,8 @@ class PredictionRequest(BaseModel):
     pending_requests: int = Field(..., ge=0, description="The number of pending ride requests.")
     traffic_index: float = Field(..., ge=0.0, le=1.0, description="A normalized traffic index (0=clear, 1=congested).")
     weather_score: float = Field(..., ge=0.0, le=1.0, description="A normalized weather score (0=storm, 1=sunny).")
+    event: str = Field("none", description="The current event (e.g., 'concert', 'holiday').")
+    competitor_price: float = Field(1.0, ge=0.0, description="The competitor's price multiplier.")
 
 class PredictionResponse(BaseModel):
     """

@@ -60,7 +60,7 @@ To train a new model, run the `train.py` script:
 python src/train.py
 ```
 
-This will create a `yassir_ppo_hydra.pth` file in the project root. To use this model with the API, move it to the `models/` directory and rename it to `<zone-name>.pth` (e.g., `HYDRA.pth`).
+This will create a `models/HYDRA-v<timestamp>.pth` file. The API will automatically load the latest version of the model for each zone.
 
 ### Running the API Server
 
@@ -100,7 +100,7 @@ curl http://localhost:8000/api/health
 To predict the price for a given zone, send a POST request to the `/api/predict` endpoint:
 
 ```
-curl -X POST -H "Content-Type: application/json" -d '{"zone": "HYDRA", "hour": 10, "day_of_week": 2, "active_drivers": 100, "pending_requests": 50, "traffic_index": 0.5, "weather_score": 0.8}' http://localhost:8000/api/predict
+curl -X POST -H "Content-Type: application/json" -d '{"zone": "HYDRA", "hour": 10, "day_of_week": 2, "active_drivers": 100, "pending_requests": 50, "traffic_index": 0.5, "weather_score": 0.8, "event": "concert", "competitor_price": 1.1}' http://localhost:8000/api/predict
 ```
 
 ## Testing

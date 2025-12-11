@@ -79,7 +79,7 @@ class AlgiersCitySimulator:
         noise = np.random.normal(0, 0.05)
         self.traffic_index = np.clip(base_traffic + noise, 0.1, 1.0)
 
-    def step(self, price_multiplier: float) -> dict:
+    def step(self, price_multiplier: float, event: str = "none", competitor_price: float = 1.0) -> dict:
         """
         The Core Loop:
         1. We set a price (Action).
@@ -88,17 +88,22 @@ class AlgiersCitySimulator:
         """
         # 1. GENERATE ORGANIC DEMAND
         time_factor = self.get_time_factors()
-        # Demand = Base * TimeFactor * Weather (Rain = High Demand)
         weather_demand_boost = 1.0 + (1.0 - self.weather_score)
 
-        raw_demand = self.zone.base_demand * time_factor * weather_demand_boost
+        # Event-based demand modifier
+        event_modifier = 1.0
+        if event == "concert":
+            event_modifier = 1.5
+        elif event == "holiday":
+            event_modifier = 0.8
+
+        raw_demand = self.zone.base_demand * time_factor * weather_demand_boost * event_modifier
         raw_demand = int(np.random.poisson(raw_demand))
 
         # 2. MARKET REACTION (ECONOMICS 101)
-        # Higher Price = Lower Conversion (The "Curve")
-        # Formula: Conversion = exp( -Elasticity * (Price - 1.0) )
-        # If Price=1.0 -> Conv=100%. If Price=2.0 -> Conv drops fast.
-        conversion_rate = math.exp(-self.zone.price_elasticity * (price_multiplier - 1.0))
+        # Conversion rate is affected by our price and competitor's price
+        price_difference = price_multiplier - competitor_price
+        conversion_rate = math.exp(-self.zone.price_elasticity * price_difference)
         conversion_rate = np.clip(conversion_rate, 0.05, 1.0)
 
         actual_requests = int(raw_demand * conversion_rate)

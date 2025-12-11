@@ -1,6 +1,8 @@
 import torch
 import numpy as np
 import math
+from utils import get_state_vector
+import random
 from datetime import datetime
 
 from ml.simulation_engine import AlgiersCitySimulator
@@ -14,29 +16,28 @@ class YassirPricingEnv:
     def __init__(self, simulator):
         self.sim = simulator
         self.action_space = ACTION_SPACE
-        self.state_dim = 6
+        self.state_dim = 10  # Added event and competitor_price
 
     def reset(self):
         # For simplicity in this standalone script, we re-initialize the simulator.
-        # In a real-world scenario, you might have more complex reset logic.
         self.sim = AlgiersCitySimulator("HYDRA")
+        self.current_event = "none"
+        self.competitor_price = 1.0
         return self._get_state()
 
     def _get_state(self):
-        # Normalize inputs for the Neural Network (0.0 to 1.0 range)
+        # Normalize inputs for the Neural Network
         s = self.sim
-        return np.array([
-            s.hour / 24.0,
-            s.day / 7.0,
-            min(s.active_drivers / MAX_ACTIVE_DRIVERS, 1),
-            min(s.pending_requests / MAX_PENDING_REQUESTS, 1),
-            s.traffic_index,
-            s.weather_score
-        ], dtype=np.float32)
+        return get_state_vector(s.hour, s.day, s.active_drivers, s.pending_requests, s.traffic_index, s.weather_score, self.competitor_price, self.current_event)
 
     def step(self, action_idx):
         multiplier = self.action_space[action_idx]
-        stats = self.sim.step(multiplier)
+
+        # Simulate a random event and competitor price for the next step
+        self.current_event = random.choice(["none", "concert", "holiday"])
+        self.competitor_price = random.uniform(0.9, 1.3)
+
+        stats = self.sim.step(multiplier, self.current_event, self.competitor_price)
         revenue_score = stats['gmv'] / 100.0
         lost_customer_penalty = stats['lost_demand'] * 0.5
         reward = revenue_score - lost_customer_penalty
@@ -51,7 +52,7 @@ if __name__ == "__main__":
     # 1. SETUP
     sim = AlgiersCitySimulator("HYDRA")
     env = YassirPricingEnv(sim)
-    agent = PPOAgent(state_dim=6, action_dim=len(env.action_space), lr=0.0003)
+    agent = PPOAgent(state_dim=env.state_dim, action_dim=len(env.action_space), lr=0.0003)
 
     print("🚀 Starting PPO Training for Yassir Dynamic Pricing...")
     print(f"Zone: {sim.zone.name} | Base Demand: {sim.zone.base_demand}/hr")

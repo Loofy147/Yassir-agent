@@ -26,7 +26,7 @@ def retrain_model(model_path: str, zone: str, episodes: int = 100):
     # 1. SETUP
     sim = AlgiersCitySimulator(zone)
     env = YassirPricingEnv(sim)
-    agent = PPOAgent(state_dim=6, action_dim=len(env.action_space), lr=0.0001, model_path=model_path)
+    agent = PPOAgent(state_dim=env.state_dim, action_dim=len(env.action_space), lr=0.0001, model_path=model_path)
 
     print(f"🚀 Starting retraining for zone '{zone}' from model '{model_path}'...")
 

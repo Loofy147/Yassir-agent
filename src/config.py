@@ -5,7 +5,7 @@ import os
 # ==============================================================================
 
 # Action space definition
-ACTION_SPACE = [0.8, 1.0, 1.2, 1.5, 2.0]
+ACTION_SPACE = [0.8, 1.0, 1.2, 1.5, 1.8, 2.0]
 
 # Normalization constants
 MAX_ACTIVE_DRIVERS = 200
