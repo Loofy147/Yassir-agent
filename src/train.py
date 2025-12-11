@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 import math
+from datetime import datetime
 
 from ml.simulation_engine import AlgiersCitySimulator
 from ml.ppo_agent import PPOAgent
@@ -99,6 +100,7 @@ if __name__ == "__main__":
 
     # 3. SAVE THE TRAINED BRAIN
     print("\n✅ Training Complete. Saving Model...")
-    model_path = f"models/{sim.zone.name}.pth"
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    model_path = f"models/{sim.zone.name}-v{timestamp}.pth"
     torch.save(agent.policy.state_dict(), model_path)
     print(f"Model saved to '{model_path}'")

@@ -24,12 +24,23 @@ def load_models():
     try:
         if not os.path.exists(MODELS_DIR):
             os.makedirs(MODELS_DIR)
+
+        # Group models by zone
+        models_by_zone = {}
         for model_file in os.listdir(MODELS_DIR):
             if model_file.endswith(".pth"):
-                zone = model_file.replace(".pth", "")
-                model_path = os.path.join(MODELS_DIR, model_file)
-                MODEL_CACHE[zone] = PPOAgent(model_path=model_path)
-                logger.info(f"Model for zone '{zone}' loaded successfully.")
+                zone = model_file.split("-v")[0]
+                if zone not in models_by_zone:
+                    models_by_zone[zone] = []
+                models_by_zone[zone].append(model_file)
+
+        # Load the latest version of each model
+        for zone, model_files in models_by_zone.items():
+            latest_model = sorted(model_files, reverse=True)[0]
+            model_path = os.path.join(MODELS_DIR, latest_model)
+            MODEL_CACHE[zone] = PPOAgent(model_path=model_path)
+            logger.info(f"Model for zone '{zone}' loaded successfully from '{latest_model}'.")
+
         if not MODEL_CACHE:
             IS_HEALTHY = False
             logger.warning(f"No models found in the models directory '{MODELS_DIR}'. The service will be unhealthy.")
