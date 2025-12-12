@@ -1,5 +1,6 @@
 import pandas as pd
 import os
+import datetime
 from src.ml.dqn_agent import YassirPricingAgent
 
 # ============================================================================
@@ -54,16 +55,19 @@ agent = YassirPricingAgent(zone_config=zone_config)
 agent.offline_pretrain(historical_logs, epochs=100)
 
 # ============================================================================
-# PHASE 4: SAVING THE MODEL (Corrected Path)
+# PHASE 4: SAVING THE MODEL (with Versioning)
 # ============================================================================
-# Create the models directory if it doesn't exist
 MODELS_DIR = "models"
 if not os.path.exists(MODELS_DIR):
     os.makedirs(MODELS_DIR)
 
-# Save the model with a zone-specific name that the API expects
+# Generate a timestamp for the model version
+timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+
+# Save the model with a zone-and-version-specific name
 ZONE_NAME = "BAB_EZZOUAR"
-model_path = os.path.join(MODELS_DIR, f"{ZONE_NAME}.pth")
+model_filename = f"{ZONE_NAME}-v{timestamp}.pth"
+model_path = os.path.join(MODELS_DIR, model_filename)
 agent.save_model(model_path)
 print(f"\n✅ Training complete. Model for zone '{ZONE_NAME}' saved to {model_path}")
 

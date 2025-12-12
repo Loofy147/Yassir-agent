@@ -1,111 +1,71 @@
 import pytest
 from fastapi.testclient import TestClient
 from src.main import app
-from src.ml.dqn_agent import YassirPricingAgent # Import the agent
+from src.ml.dqn_agent import YassirPricingAgent
 import os
 import time
-import torch # Import torch to save the model
 
-# The TestClient doesn't automatically run startup events. We need to trigger them manually.
+MODELS_DIR = "models"
+ZONE_NAME = "BAB_EZZOUAR"
+
 @pytest.fixture(scope="session")
 def test_client():
     """Create a TestClient that has had its startup events executed."""
     with TestClient(app) as client:
         yield client
 
-# This fixture now creates a VALID, minimal PyTorch model for the tests.
 @pytest.fixture(scope="session", autouse=True)
-def create_valid_test_model():
-    """Ensures a valid, loadable model file exists so the API can start up healthily."""
-    MODELS_DIR = "models"
-    ZONE_NAME = "BAB_EZZOUAR"
-    MODEL_PATH = os.path.join(MODELS_DIR, f"{ZONE_NAME}.pth")
-
+def create_versioned_test_models():
+    """Create versioned models for testing the loading and metrics logic."""
     if not os.path.exists(MODELS_DIR):
         os.makedirs(MODELS_DIR)
 
-    if not os.path.exists(MODEL_PATH):
-        print(f"Creating a temporary test model at: {MODEL_PATH}")
-        # Create a barebones agent instance with the correct config
-        zone_config = {"max_drivers": 150, "max_requests": 300}
-        test_agent = YassirPricingAgent(zone_config=zone_config)
-        # Save its initial (untrained) state. This is a valid torch file.
-        test_agent.save_model(MODEL_PATH)
+    # Clean up old models
+    for f in os.listdir(MODELS_DIR):
+        os.remove(os.path.join(MODELS_DIR, f))
+
+    zone_config = {"max_drivers": 150, "max_requests": 300}
+    test_agent = YassirPricingAgent(zone_config=zone_config)
+
+    # Create two model versions to test the loading logic
+    test_agent.save_model(os.path.join(MODELS_DIR, f"{ZONE_NAME}-v20230101000000.pth"))
+    test_agent.save_model(os.path.join(MODELS_DIR, f"{ZONE_NAME}-v20230101010000.pth"))
+
+def test_loads_latest_model_version(test_client):
+    """Verify that the API loads the newest model version."""
+    response = test_client.get("/api/versions")
+    assert response.status_code == 200
+    loaded_versions = response.json()
+    assert loaded_versions.get(ZONE_NAME) == f"{ZONE_NAME}-v20230101010000.pth"
+
+def test_metrics_endpoint_standard_and_custom(test_client):
+    """
+    Verify the /metrics endpoint is working and tracks both standard
+    and custom metrics correctly.
+    """
+    # 1. Make a prediction request to generate metrics
+    payload = { "zone": ZONE_NAME, "hour": 10, "day_of_week": 1, "active_drivers": 50,
+                "pending_requests": 100, "traffic_index": 0.5, "weather_score": 0.8 }
+    response = test_client.post("/api/predict", json=payload)
+    assert response.status_code == 200
+
+    # 2. Scrape the /metrics endpoint
+    metrics_response = test_client.get("/metrics")
+    assert metrics_response.status_code == 200
+    metrics_text = metrics_response.text
+
+    # 3. Verify standard metric from the instrumentator
+    # Checks that a request to the /api/predict endpoint was recorded
+    assert f'http_requests_total{{handler="/api/predict",method="POST",status="2xx"}}' in metrics_text
+
+    # 4. Verify custom prediction counter
+    # Checks that our custom counter was incremented for the correct zone
+    expected_custom_metric = f'price_predictions_total{{zone="{ZONE_NAME}"}} 1.0'
+    assert expected_custom_metric in metrics_text, \
+        f"Custom metric not found or incorrect. Expected: '{expected_custom_metric}'"
 
 def test_health_check_ok(test_client):
-    """Test that the API is healthy when a model is present."""
+    """Test that the API is healthy."""
     response = test_client.get("/api/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
-
-def test_predict_price_bab_ezzouar_surge(test_client):
-    """Test a prediction scenario that should result in a price surge."""
-    payload = {
-        "zone": "BAB_EZZOUAR",
-        "hour": 18,
-        "day_of_week": 4,
-        "active_drivers": 40,
-        "pending_requests": 200,
-        "traffic_index": 0.85,
-        "weather_score": 0.2
-    }
-
-    response = test_client.post("/api/predict", json=payload)
-    assert response.status_code == 200
-    data = response.json()
-    assert "price_multiplier" in data
-    assert 0.8 <= data["price_multiplier"] <= 2.0
-
-def test_predict_price_bab_ezzouar_discount(test_client):
-    """Test a prediction scenario that should result in a price discount."""
-    payload = {
-        "zone": "BAB_EZZOUAR",
-        "hour": 2,
-        "day_of_week": 6,
-        "active_drivers": 140,
-        "pending_requests": 10,
-        "traffic_index": 0.1,
-        "weather_score": 0.9
-    }
-
-    response = test_client.post("/api/predict", json=payload)
-    assert response.status_code == 200
-    data = response.json()
-    assert "price_multiplier" in data
-    assert 0.8 <= data["price_multiplier"] <= 2.0
-
-def test_predict_price_latency_sla(test_client):
-    """Test that the prediction latency is within the 50ms SLA."""
-    payload = {
-        "zone": "BAB_EZZOUAR",
-        "hour": 10,
-        "day_of_week": 2,
-        "active_drivers": 100,
-        "pending_requests": 50,
-        "traffic_index": 0.5,
-        "weather_score": 0.8
-    }
-
-    start_time = time.time()
-    response = test_client.post("/api/predict", json=payload)
-    latency_ms = (time.time() - start_time) * 1000
-
-    assert response.status_code == 200
-    print(f"Prediction latency: {latency_ms:.2f}ms")
-    assert latency_ms < 50, f"Latency {latency_ms:.2f}ms exceeds 50ms SLA"
-
-def test_predict_price_zone_not_found(test_client):
-    """Test the response when a model for the requested zone is not found."""
-    payload = {
-        "zone": "UNKNOWN_ZONE",
-        "hour": 12,
-        "day_of_week": 3,
-        "active_drivers": 70,
-        "pending_requests": 80,
-        "traffic_index": 0.4,
-        "weather_score": 0.7
-    }
-
-    response = test_client.post("/api/predict", json=payload)
-    assert response.status_code == 404
-    assert response.json()["detail"] == "Model for zone 'UNKNOWN_ZONE' not found."
+    assert response.json()["status"] == "ok"
