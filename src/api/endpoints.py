@@ -6,21 +6,31 @@ from collections import defaultdict
 from .models import PredictionRequest, PredictionResponse
 from ml.dqn_agent import YassirPricingAgent
 from config import MAX_ACTIVE_DRIVERS, MAX_PENDING_REQUESTS, MODELS_DIR
+from prometheus_client import Counter
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# ---------------- Prometheus Custom Metrics ----------------
+# A counter to track the number of price predictions per zone.
+PRICE_PREDICTIONS = Counter(
+    "price_predictions_total",
+    "Total number of price predictions made",
+    ["zone"] # Label to distinguish predictions by zone
+)
+# -----------------------------------------------------------
+
 IS_HEALTHY = True
 MODEL_CACHE = {}
-MODEL_VERSIONS = {} # To store the version of the loaded model
+MODEL_VERSIONS = {}
 
 @router.on_event("startup")
 def load_models():
     """Load the latest version of all models at startup."""
     global IS_HEALTHY, MODEL_CACHE, MODEL_VERSIONS
-    MODEL_CACHE = {} # Reset cache on startup
+    MODEL_CACHE = {}
     MODEL_VERSIONS = {}
     try:
         if not os.path.exists(MODELS_DIR):
@@ -78,6 +88,9 @@ def get_model_versions():
 @router.post("/predict", response_model=PredictionResponse)
 def predict_price(request: PredictionRequest):
     """Predicts the optimal price multiplier using the latest DQN agent."""
+    # Increment the custom Prometheus counter for this zone.
+    PRICE_PREDICTIONS.labels(zone=request.zone).inc()
+
     if not IS_HEALTHY:
         raise HTTPException(status_code=503, detail="Service is unhealthy.")
 

@@ -4,3 +4,4 @@ pandas==2.3.3
 fastapi==0.124.2
 uvicorn==0.38.0
 pytest==9.0.2
+prometheus-fastapi-instrumentator

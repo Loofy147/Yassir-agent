@@ -1,20 +1,19 @@
 from fastapi import FastAPI
 from api.endpoints import router as api_router
+from prometheus_fastapi_instrumentator import Instrumentator
 
 app = FastAPI(
     title="Yassir Dynamic Pricing API",
-    description="A service to provide dynamic pricing recommendations for Yassir rides.",
-    version="0.1.0",
+    description="An API for predicting dynamic price multipliers.",
+    version="1.0.0"
 )
 
+# Instrument the app with Prometheus metrics
+Instrumentator().instrument(app).expose(app)
+
+# Include the API router
 app.include_router(api_router, prefix="/api")
 
-@app.on_event("startup")
-async def startup_event():
-    # This is where you can add any startup logic, like loading models.
-    # In our case, the model loading is handled in the endpoints file.
-    pass
-
-@app.get("/")
+@app.get("/", tags=["Root"])
 def read_root():
     return {"message": "Welcome to the Yassir Dynamic Pricing API"}
