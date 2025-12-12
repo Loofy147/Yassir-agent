@@ -1,26 +1,32 @@
 import pandas as pd
-from data_generator import generate_yassir_pricing_data
-from agent import YassirPricingAgent
+import os
+from src.ml.dqn_agent import YassirPricingAgent
 
 # ============================================================================
-# PHASE 1: DATA GENERATION
+# PHASE 1: DATA LOADING AND CLEANING
 # ============================================================================
-print("--- Generating Synthetic Training Data ---")
-# Generate 50,000 samples for a more robust training session
-df = generate_yassir_pricing_data(num_samples=50000)
-df.to_csv("yassir_synthetic_pricing_data.csv", index=False)
-print("Synthetic data saved to yassir_synthetic_pricing_data.csv")
-print("Data Preview:")
-print(df.head())
+print("--- Loading and Cleaning Synthetic Training Data ---")
+try:
+    df = pd.read_csv("yassir_synthetic_pricing_data.csv")
+    print("Successfully loaded yassir_synthetic_pricing_data.csv")
+except FileNotFoundError:
+    print("Error: yassir_synthetic_pricing_data.csv not found.")
+    print("Please run data_generator.py first to generate the dataset.")
+    exit()
+
+# Data Quality Enhancement: Filter out samples with high cancellation rates
+initial_rows = len(df)
+df_clean = df[df['reward_cancel_rate'] <= 0.05].copy()
+final_rows = len(df_clean)
+print(f"Filtered out {initial_rows - final_rows} samples with cancellation rates > 5%.")
+print(f"Clean dataset contains {final_rows} samples.")
 
 # ============================================================================
 # PHASE 2: DATA PREPARATION FOR PRE-TRAINING
 # ============================================================================
 print("\n--- Preparing Data for Offline Pre-training ---")
-# Convert the DataFrame to the list format expected by the agent's offline_pretrain method
 historical_logs = []
-for _, row in df.iterrows():
-    # Construct the state dictionary from the dataframe row
+for _, row in df_clean.iterrows():
     state_dict = {
         "hour": int(row["hour"]),
         "day": int(row["day"]),
@@ -29,49 +35,48 @@ for _, row in df.iterrows():
         "traffic": float(row["traffic"]),
         "weather": float(row["weather"])
     }
-
-    # Extract the other required components for the training tuple
-    multiplier = float(row["action_multiplier"])
-    gmv = float(row["reward_gmv"])
-    cancel_rate = float(row["reward_cancel_rate"])
-
-    # Append the formatted tuple to our list
-    historical_logs.append((state_dict, multiplier, gmv, cancel_rate))
-
+    historical_logs.append((
+        state_dict,
+        float(row["action_multiplier"]),
+        float(row["reward_gmv"]),
+        float(row["reward_cancel_rate"])
+    ))
 print(f"Converted {len(historical_logs)} rows into the required training format.")
 
 # ============================================================================
 # PHASE 3: AGENT TRAINING
 # ============================================================================
 print("\n--- Initializing and Pre-training the Agent ---")
-# Configure the agent for the "Bab Ezzouar" zone as per the instructions
 zone_config = {"max_drivers": 150, "max_requests": 300}
 agent = YassirPricingAgent(zone_config=zone_config)
 
-# Train the agent on the historical data for 100 epochs
+# Train the agent on the cleaned historical data
 agent.offline_pretrain(historical_logs, epochs=100)
 
-# Save the trained model
-model_path = "yassir_pretrained_algiers.pth"
-agent.save_model(model_path)
-print(f"\nTraining complete. Model saved to {model_path}")
+# ============================================================================
+# PHASE 4: SAVING THE MODEL (Corrected Path)
+# ============================================================================
+# Create the models directory if it doesn't exist
+MODELS_DIR = "models"
+if not os.path.exists(MODELS_DIR):
+    os.makedirs(MODELS_DIR)
 
+# Save the model with a zone-specific name that the API expects
+ZONE_NAME = "BAB_EZZOUAR"
+model_path = os.path.join(MODELS_DIR, f"{ZONE_NAME}.pth")
+agent.save_model(model_path)
+print(f"\n✅ Training complete. Model for zone '{ZONE_NAME}' saved to {model_path}")
 
 # ============================================================================
-# PHASE 4: VALIDATION
+# PHASE 5: VALIDATION
 # ============================================================================
 print("\n--- Running Validation Checks on Trained Agent ---")
-# Test on a couple of edge-case scenarios to see if the agent learned correctly
-
 test_scenarios = [
-    # Scenario 1: High demand, low supply, bad traffic & weather (should surge)
-    {"hour": 18, "day": 4, "drivers": 40, "requests": 200, "traffic": 0.85, "weather": 0.2, "name": "Rush Hour + Rain"},
-    # Scenario 2: High supply, low demand, good conditions (should discount)
-    {"hour": 11, "day": 2, "drivers": 120, "requests": 50, "traffic": 0.3, "weather": 0.9, "name": "Midday Oversupply"},
+    {"hour": 18, "day": 4, "drivers": 40, "requests": 200, "traffic": 0.85, "weather": 0.2, "name": "Rush Hour + Rain (Expect Surge)"},
+    {"hour": 11, "day": 2, "drivers": 120, "requests": 50, "traffic": 0.3, "weather": 0.9, "name": "Midday Oversupply (Expect Discount)"},
 ]
 
 for scenario in test_scenarios:
-    # The agent's predict_price method handles state engineering internally
     multiplier, metadata = agent.predict_price(scenario)
     print(f"\nScenario: {scenario['name']}")
     print(f"  Input -> Drivers: {scenario['drivers']}, Requests: {scenario['requests']}")
