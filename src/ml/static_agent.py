@@ -1,24 +1,36 @@
-from typing import Dict
-
 class StaticPricingAgent:
     """
-    A simple, rule-based pricing agent that serves as a baseline for comparison.
+    A simple, rule-based pricing agent that serves as a baseline for A/B testing.
+    This agent's logic is deterministic and easy to understand.
     """
-    def predict_price(self, raw_state: Dict[str, any]) -> float:
+    def predict_price(self, raw_state: dict):
         """
-        Predicts a price multiplier based on a simple set of rules.
+        Calculates a price multiplier based on a fixed set of rules.
+
+        Args:
+            raw_state: A dictionary containing the current state, including 'hour'.
+
+        Returns:
+            A tuple containing the price multiplier and a metadata dictionary.
         """
-        hour = raw_state.get("hour", 12)
-        day = raw_state.get("day", 3)
-        active_drivers = raw_state.get("drivers", 100)
-        pending_requests = raw_state.get("requests", 50)
+        hour = raw_state.get("hour", 0)
 
-        # Rule 1: Surge pricing during rush hour
-        if 7 <= hour <= 9 or 16 <= hour <= 19 and day < 5:
-            return 1.3
+        # Rule 1: Morning and evening rush hour surge
+        if (7 <= hour <= 9) or (17 <= hour <= 19):
+            multiplier = 1.3
+            reason = "rush_hour_surge"
+        # Rule 2: Late night discount
+        elif 0 <= hour <= 5:
+            multiplier = 0.8
+            reason = "late_night_discount"
+        # Default: Base price
+        else:
+            multiplier = 1.0
+            reason = "base_price"
 
-        # Rule 2: Discount pricing if there is an oversupply of drivers
-        if active_drivers > pending_requests * 2:
-            return 0.8
+        metadata = {
+            "agent_type": "static",
+            "reason": reason
+        }
 
-        return 1.0
+        return multiplier, metadata
