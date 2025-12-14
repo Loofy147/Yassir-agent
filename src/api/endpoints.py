@@ -2,6 +2,9 @@ from fastapi import APIRouter, HTTPException, Header
 from typing import Optional
 import os
 import logging
+import time
+from src.utils.logging_config import PredictionLogger
+from src.ml.fallback import FallbackPricingStrategy
 import re
 import hashlib
 from collections import defaultdict
@@ -9,10 +12,12 @@ from .models import PredictionRequest, PredictionResponse
 from ml.dqn_agent import YassirPricingAgent
 from ml.static_agent import StaticPricingAgent
 from config import MAX_ACTIVE_DRIVERS, MAX_PENDING_REQUESTS, MODELS_DIR
-from prometheus_client import Counter
 
+# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+prediction_logger = PredictionLogger()
+fallback_strategy = FallbackPricingStrategy()
 
 router = APIRouter()
 
@@ -22,7 +27,9 @@ PRICE_PREDICTIONS = Counter(
     ["zone", "agent_type"]
 )
 
-IS_HEALTHY = True
+# ==============================================================================
+# MODEL LOADING (at startup)
+# ==============================================================================
 MODEL_CACHE = {}
 MODEL_VERSIONS = {}
 STATIC_AGENT = StaticPricingAgent()
@@ -58,11 +65,14 @@ def load_models():
         IS_HEALTHY = False
         logger.critical(f"Critical error loading models: {e}", exc_info=True)
 
-@router.get("/health", status_code=200)
+# ==============================================================================
+# API ENDPOINTS
+# ==============================================================================
+@router.get("/health")
 def health_check():
     return {"status": "ok" if IS_HEALTHY else "unhealthy", "loaded_models": list(MODEL_CACHE.keys())}
 
-@router.get("/versions", status_code=200)
+@router.get("/versions")
 def get_model_versions():
     return MODEL_VERSIONS
 
