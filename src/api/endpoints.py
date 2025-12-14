@@ -1,30 +1,55 @@
 from fastapi import APIRouter, HTTPException
+from prometheus_client import Counter, Histogram, Gauge
+from ml.dqn_agent import YassirPricingAgent
+from .models import PredictionRequest, PredictionResponse
 import os
 import logging
+import time
+from src.utils.logging_config import PredictionLogger
+from src.ml.fallback import FallbackPricingStrategy
 import re
 from collections import defaultdict
-from .models import PredictionRequest, PredictionResponse
-from ml.dqn_agent import YassirPricingAgent
 from config import MAX_ACTIVE_DRIVERS, MAX_PENDING_REQUESTS, MODELS_DIR
-from prometheus_client import Counter
 
+# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+prediction_logger = PredictionLogger()
+fallback_strategy = FallbackPricingStrategy()
 
 router = APIRouter()
 
-# ---------------- Prometheus Custom Metrics ----------------
-# A counter to track the number of price predictions per zone.
+# ==============================================================================
+# METRICS & LOGGING
+# ==============================================================================
 PRICE_PREDICTIONS = Counter(
     "price_predictions_total",
     "Total number of price predictions made",
-    ["zone"] # Label to distinguish predictions by zone
+    ["zone"]
 )
-# -----------------------------------------------------------
+PREDICTION_LATENCY = Histogram(
+    "prediction_latency_seconds",
+    "Latency of price predictions",
+    ["zone"]
+)
+PREDICTED_MULTIPLIER = Histogram(
+    "predicted_multiplier",
+    "Distribution of predicted price multipliers",
+    ["zone"],
+    buckets=[0.8, 1.0, 1.3, 1.6, 2.0]
+)
+SAFETY_OVERRIDES = Counter(
+    "safety_override_total",
+    "Number of times safety rules overrode the model",
+    ["zone"]
+)
 
-IS_HEALTHY = True
+# ==============================================================================
+# MODEL LOADING (at startup)
+# ==============================================================================
 MODEL_CACHE = {}
 MODEL_VERSIONS = {}
+IS_HEALTHY = False
 
 @router.on_event("startup")
 def load_models():
@@ -71,41 +96,67 @@ def load_models():
         IS_HEALTHY = False
         logger.critical(f"Critical error during model loading: {e}", exc_info=True)
 
-@router.get("/health", status_code=200)
+# ==============================================================================
+# API ENDPOINTS
+# ==============================================================================
+@router.get("/health")
 def health_check():
-    """Health check endpoint."""
-    if not IS_HEALTHY:
-        raise HTTPException(status_code=503, detail="Service is unhealthy: Models not loaded.")
-    return {"status": "ok", "loaded_models": list(MODEL_CACHE.keys())}
+    if IS_HEALTHY:
+        return {"status": "ok", "models_loaded": list(MODEL_CACHE.keys())}
+    else:
+        raise HTTPException(status_code=503, detail="Service is unhealthy, no models loaded.")
 
-@router.get("/versions", status_code=200)
+@router.get("/versions")
 def get_model_versions():
-    """Returns the filenames of the currently loaded models."""
-    if not IS_HEALTHY:
-        raise HTTPException(status_code=503, detail="Service is unhealthy.")
     return MODEL_VERSIONS
 
 @router.post("/predict", response_model=PredictionResponse)
 def predict_price(request: PredictionRequest):
-    """Predicts the optimal price multiplier using the latest DQN agent."""
-    # Increment the custom Prometheus counter for this zone.
-    PRICE_PREDICTIONS.labels(zone=request.zone).inc()
-
-    if not IS_HEALTHY:
-        raise HTTPException(status_code=503, detail="Service is unhealthy.")
-
-    agent = MODEL_CACHE.get(request.zone)
-    if not agent:
-        raise HTTPException(status_code=404, detail=f"Model for zone '{request.zone}' not found.")
+    """Predicts optimal price multiplier based on the input state"""
+    start_time = time.time()
 
     raw_state = {
-        "hour": request.hour, "day": request.day_of_week, "drivers": request.active_drivers,
-        "requests": request.pending_requests, "traffic": request.traffic_index, "weather": request.weather_score
+        "hour": request.hour, "day": request.day_of_week,
+        "drivers": request.active_drivers, "requests": request.pending_requests,
+        "traffic": request.traffic_index, "weather": request.weather_score
     }
 
-    multiplier, metadata = agent.predict_price(raw_state)
+    try:
+        PRICE_PREDICTIONS.labels(zone=request.zone).inc()
 
-    model_version = MODEL_VERSIONS.get(request.zone, "unknown")
-    logger.info(f"Prediction for zone {request.zone} (model: {model_version}): multiplier={multiplier}")
+        agent = MODEL_CACHE.get(request.zone)
+        if not agent:
+            logger.warning(f"Model not found for zone {request.zone}, using fallback")
+            raw_state['day_of_week'] = raw_state.pop('day')
+            multiplier = fallback_strategy.get_fallback_price(**raw_state, zone=request.zone)
+            return PredictionResponse(price_multiplier=multiplier)
 
-    return PredictionResponse(price_multiplier=multiplier)
+        with PREDICTION_LATENCY.labels(zone=request.zone).time():
+            multiplier, metadata = agent.predict_price(raw_state)
+
+        PREDICTED_MULTIPLIER.labels(zone=request.zone).observe(multiplier)
+        if metadata.get('safety_override'):
+            SAFETY_OVERRIDES.labels(zone=request.zone).inc()
+
+        response_time_ms = (time.time() - start_time) * 1000
+        prediction_logger.log_prediction(
+            zone=request.zone,
+            input_state=raw_state,
+            predicted_multiplier=multiplier,
+            metadata=metadata,
+            response_time_ms=response_time_ms
+        )
+
+        return PredictionResponse(price_multiplier=multiplier)
+
+    except Exception as e:
+        response_time_ms = (time.time() - start_time) * 1000
+        prediction_logger.log_error(
+            zone=request.zone,
+            error=str(e),
+            input_state=raw_state
+        )
+        logger.error(f"Prediction failed for zone {request.zone}: {e}, using fallback")
+        raw_state['day_of_week'] = raw_state.pop('day')
+        multiplier = fallback_strategy.get_fallback_price(**raw_state, zone=request.zone)
+        return PredictionResponse(price_multiplier=multiplier)

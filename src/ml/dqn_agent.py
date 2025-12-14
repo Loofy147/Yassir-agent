@@ -107,51 +107,68 @@ class YassirPricingAgent:
                         weather, supply_demand_ratio], dtype=np.float32)
 
     def select_action(self, state, training=True):
-        """Epsilon-greedy action selection (used during training)"""
-        if training and random.random() < self.epsilon:
-            return random.randint(0, self.action_dim - 1)
+        """
+        Selects an action using an epsilon-greedy strategy, but only from
+        the set of safe actions.
+        """
+        mask = self.get_safe_action_mask(state)
+        valid_actions = np.where(mask)[0]
 
+        if training and random.random() < self.epsilon:
+            # Exploration: choose a random valid action
+            return np.random.choice(valid_actions)
+
+        # Exploitation: choose the best valid action from the policy
         with torch.no_grad():
             state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
-            q_values = self.policy_net(state_tensor)
+            q_values = self.policy_net(state_tensor).squeeze(0)
+
+            # Apply mask before selecting the best action
+            q_values[~mask] = -float('inf')
+
             return q_values.argmax().item()
+
+    def get_safe_action_mask(self, state):
+        """
+        Returns a boolean mask of valid actions based on safety rules.
+        - True means the action is allowed.
+        - False means the action is disallowed.
+        """
+        mask = np.array([True] * self.action_dim)
+
+        # Extract features for rule evaluation
+        traffic = state[4]
+        weather = state[5]
+        supply_demand_ratio = state[6]
+
+        # RULE 1: No surge pricing if traffic is low
+        if traffic < self.MAX_SURGE_TRAFFIC_THRESHOLD:
+            mask[2:] = False  # Actions for 1.3x, 1.6x, 2.0x are disallowed
+
+        # RULE 2: Must discount if there is a driver oversupply
+        if supply_demand_ratio > self.DISCOUNT_RATIO_THRESHOLD:
+            mask[1:] = False  # Only 0.8x is allowed
+
+        # RULE 3: Cap surge during extreme weather
+        if weather < 0.3:
+            mask[4] = False  # 2.0x surge is disallowed
+
+        return mask
 
     def select_safe_action(self, state):
         """
-        IMPROVEMENT B: Safety Masking
-        Apply business rules BEFORE returning final action
-
-        Args:
-            state: Engineered state vector (7 features)
-        Returns:
-            action_id: Safe action index (0-4)
+        Selects the best safe action based on Q-values and the safety mask.
         """
-        # Get AI recommendation
         with torch.no_grad():
             state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
-            q_values = self.policy_net(state_tensor)
-            action = q_values.argmax().item()
+            q_values = self.policy_net(state_tensor).squeeze(0)
 
-        # Extract key state variables
-        drivers_norm = state[2]
-        requests_norm = state[3]
-        traffic = state[4]
-        supply_demand_ratio = state[6]
+            mask = self.get_safe_action_mask(state)
 
-        # RULE 1: Never surge if traffic is low (brand damage)
-        if traffic < self.MAX_SURGE_TRAFFIC_THRESHOLD and action >= 2:
-            return 1  # Force base price (1.0x)
+            # Apply mask: set Q-values of unsafe actions to a very low number
+            q_values[~mask] = -float('inf')
 
-        # RULE 2: Force discount if too many drivers (prevent idle driver churn)
-        if supply_demand_ratio > self.DISCOUNT_RATIO_THRESHOLD and action > 0:
-            return 0  # Force discount (0.8x)
-
-        # RULE 3: Cap surge during extreme weather (regulatory compliance)
-        weather = state[5]
-        if weather < 0.3 and action == 4:  # Extreme weather + max surge
-            return 3  # Cap at 1.6x instead of 2.0x
-
-        return action
+            return q_values.argmax().item()
 
     def get_multiplier(self, action):
         """Convert action index to actual price multiplier"""
@@ -203,7 +220,13 @@ class YassirPricingAgent:
         current_q = self.policy_net(states).gather(1, actions.unsqueeze(1)).squeeze()
 
         with torch.no_grad():
-            next_q = self.target_net(next_states).max(1)[0]
+            next_q_values = self.target_net(next_states)
+
+            # Apply safety mask to next_states' Q-values
+            next_state_masks = np.array([self.get_safe_action_mask(s) for s in next_states.cpu().numpy()])
+            next_q_values[~torch.from_numpy(next_state_masks).to(self.device)] = -float('inf')
+
+            next_q = next_q_values.max(1)[0]
             target_q = rewards + (1 - dones) * self.gamma * next_q
 
         loss = nn.MSELoss()(current_q, target_q)
@@ -263,14 +286,19 @@ class YassirPricingAgent:
 
         print("Pre-training complete. Epsilon reduced to 0.3 for safer exploration.")
 
-    def _compute_reward(self, gmv, cancellation_rate, cancellation_threshold=0.05):
-        """Reward function balancing GMV and cancellation rate"""
-        gmv_reward = min(gmv / 1000, 10)
-        if cancellation_rate > cancellation_threshold:
-            penalty = -50 * (cancellation_rate - cancellation_threshold)
-        else:
-            penalty = 0
-        return gmv_reward + penalty
+    def _compute_reward(self, gmv: float, completed_rides: int, lost_demand: int) -> float:
+        """
+        Computes a reward based on financial outcomes and market health.
+
+        - Positive reward for GMV.
+        - Penalty for lost demand (unhappy users).
+        - Small bonus for each completed ride (driver satisfaction).
+        """
+        gmv_reward = gmv / 1000.0  # Scale down GMV
+        lost_demand_penalty = (lost_demand ** 1.2) * 0.1 # Exponential penalty for many lost rides
+        completion_bonus = completed_rides * 0.05
+
+        return gmv_reward - lost_demand_penalty + completion_bonus
 
     def save_model(self, path="yassir_production_dqn.pth"):
         """Save model with zone config"""
