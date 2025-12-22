@@ -10,6 +10,7 @@ import hashlib
 from collections import defaultdict
 from .models import PredictionRequest, PredictionResponse
 from ml.dqn_agent import YassirPricingAgent
+from prometheus_client import Counter
 from ml.static_agent import StaticPricingAgent
 from config import MAX_ACTIVE_DRIVERS, MAX_PENDING_REQUESTS, MODELS_DIR
 
@@ -24,7 +25,7 @@ router = APIRouter()
 PRICE_PREDICTIONS = Counter(
     "price_predictions_total",
     "Total number of price predictions made",
-    ["zone", "agent_type"]
+    ["zone", "agent_type"],
 )
 
 # ==============================================================================
@@ -94,19 +95,31 @@ def predict_price(request: PredictionRequest, x_user_id: Optional[str] = Header(
         if user_hash % 10 < 2:
             agent_type = "static"
 
+    model_version = "unknown"
+    metadata = {}  # Default metadata
+
     if agent_type == "static":
         agent = STATIC_AGENT
         model_version = "static_rules"
+        multiplier, metadata = agent.predict_price(raw_state)
     else:
         agent = MODEL_CACHE.get(request.zone)
         if not agent:
-            agent = STATIC_AGENT
-            agent_type = "static_fallback"
-            model_version = "static_rules"
+            agent_type = "fallback"
+            model_version = "rule_based_fallback"
+            multiplier = fallback_strategy.get_fallback_price(
+                zone=request.zone,
+                hour=request.hour,
+                day_of_week=request.day_of_week,
+                active_drivers=request.active_drivers,
+                pending_requests=request.pending_requests,
+                traffic_index=request.traffic_index,
+                weather_score=request.weather_score,
+            )
         else:
             model_version = MODEL_VERSIONS.get(request.zone, "unknown")
+            multiplier, metadata = agent.predict_price(raw_state)
 
     PRICE_PREDICTIONS.labels(zone=request.zone, agent_type=agent_type).inc()
-    multiplier, metadata = agent.predict_price(raw_state)
     logger.info(f"Prediction for zone {request.zone} (user: {x_user_id}, agent: {agent_type}, model: {model_version}): multiplier={multiplier}")
     return PredictionResponse(price_multiplier=multiplier)

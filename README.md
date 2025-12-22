@@ -21,7 +21,7 @@ This project is a multi-tenant, AI-powered dynamic pricing service for the Yassi
 │   ├── main.py
 │   ├── ml/
 │   │   ├── __init__.py
-│   │   ├── ppo_agent.py
+│   │   ├── dqn_agent.py
 │   │   ├── safety_guardian.py
 │   │   └── simulation_engine.py
 │   └── train.py
@@ -33,10 +33,10 @@ This project is a multi-tenant, AI-powered dynamic pricing service for the Yassi
 -   **`models/`**: This directory stores the trained model files for each zone.
 -   **`src/`**: This directory contains the main application code.
     -   **`api/`**: This directory contains the FastAPI application.
-    -   **`ml/`**: This directory contains the machine learning code, including the PPO agent, safety guardian, and simulation engine.
+    -   **`ml/`**: This directory contains the machine learning code, including the DQN agent, safety guardian, and simulation engine.
     -   **`config.py`**: This file contains the application's configuration.
     -   **`main.py`**: This is the entry point for the FastAPI application.
-    -   **`train.py`**: This script is used to train the PPO agent.
+-   **`train.py`**: This script is used to train the DQN agent.
 -   **`tests/`**: This directory contains the unit and integration tests.
 
 ## Setup Instructions
@@ -57,10 +57,10 @@ This project is a multi-tenant, AI-powered dynamic pricing service for the Yassi
 To train a new model, run the `train.py` script:
 
 ```
-python src/train.py
+python train.py
 ```
 
-This will create a `yassir_ppo_hydra.pth` file in the project root. To use this model with the API, move it to the `models/` directory and rename it to `<zone-name>.pth` (e.g., `HYDRA.pth`).
+This will create a `BAB_EZZOUAR-vYYYYMMDDHHMMSS.pth` file in the `models/` directory.
 
 ### Running the API Server
 
@@ -108,5 +108,5 @@ curl -X POST -H "Content-Type: application/json" -d '{"zone": "HYDRA", "hour": 1
 To run the unit tests, use the following command:
 
 ```
-PYTHONPATH=. pytest
+PYTHONPATH=.:src python -m pytest tests/ -v
 ```
